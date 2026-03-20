@@ -19,7 +19,9 @@ func (Newton) Name() string {
 }
 
 func (Newton) Minimize(f, df, d2f Func, a, b, eps float64) Result {
-	x := (a + b) / 2 // начальное приближение — середина отрезка
+	// можно взять серидину отрезка
+	//x := (a + b) / 2
+	x := 0.25
 	iter := 0
 
 	for {
