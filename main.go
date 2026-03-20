@@ -98,4 +98,18 @@ func main() {
 		fmt.Println("Контурный график сохранён: output/fn2_contour.png")
 	}
 
+	// 3D-график поверхности (wireframe с изометрической проекцией)
+	err3 := plotter.PlotSurface(
+		"Лаб. №2 · f(x₁,x₂) = x₁² + 3x₂² + cos(x₁+x₂)",
+		-2.5, 2.5, -1.5, 1.5,
+		35,
+		"output/fn2_surface.png",
+		fn2.F2,
+	)
+	if err3 != nil {
+		log.Printf("Ошибка построения 3D-графика: %v", err3)
+	} else {
+		fmt.Println("3D-график сохранён: output/fn2_surface.png")
+	}
+
 }
