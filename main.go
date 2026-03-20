@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"math"
 
 	fn1 "optimization/internal/fn/oneVariable"
 	fn2 "optimization/internal/fn/twoVariables"
 	m1 "optimization/internal/methods/oneVariable"
 	m2 "optimization/internal/methods/twoVariables"
+	"optimization/internal/plotter"
 )
 
 func main() {
@@ -46,6 +48,21 @@ func main() {
 	}
 	sep()
 
+	// Графики функции одной переменной
+	err := plotter.PlotFuncs(
+		"Лаб. №1 · f(x), f'(x), f''(x)  на [-0.5; 0.5]",
+		fn1.A, fn1.B, 500,
+		"output/fn1_plot.png",
+		plotter.FuncSeries{F: fn1.F, Label: "f(x)  = -x³ + 3(1+x)[ln(x+1) − 1]"},
+		plotter.FuncSeries{F: fn1.DF, Label: "f'(x) = -3x² + 3·ln(x+1)"},
+		plotter.FuncSeries{F: fn1.D2F, Label: "f''(x) = -6x + 3/(x+1)"},
+	)
+	if err != nil {
+		log.Printf("Ошибка построения графика: %v", err)
+	} else {
+		fmt.Println("График сохранён: output/fn1_plot.png")
+	}
+
 	// Лабораторная работа №2
 	fmt.Println()
 	fmt.Println("Лабораторная работа №2. Минимизация функции двух переменных")
@@ -54,7 +71,6 @@ func main() {
 
 	optimizers2 := []m2.Optimizer2D{
 		m2.GradientConst{Alpha0: 0.5},
-		m2.GradientOptimal{},
 	}
 
 	x0 := m2.Vec2{X1: fn2.X01, X2: fn2.X02}
@@ -67,4 +83,19 @@ func main() {
 		fmt.Printf("Итераций  = %d\n", res.Iterations)
 	}
 	sep()
+
+	// Контурный график функции двух переменных
+	err2 := plotter.PlotContour(
+		"Лаб. №2 · f(x₁,x₂) = x₁² + 3x₂² + cos(x₁+x₂)",
+		-2.5, 2.5, -1.5, 1.5,
+		200, 20,
+		"output/fn2_contour.png",
+		fn2.F2,
+	)
+	if err2 != nil {
+		log.Printf("Ошибка построения контурного графика: %v", err2)
+	} else {
+		fmt.Println("Контурный график сохранён: output/fn2_contour.png")
+	}
+
 }
