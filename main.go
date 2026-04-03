@@ -71,6 +71,8 @@ func main() {
 
 	optimizers2 := []m2.Optimizer2D{
 		m2.GradientConst{Alpha0: 0.5},
+		m2.GradientOptimal{},
+		m2.HookeJeeves{Step0: 0.559, Reduction: 0.5},
 	}
 
 	x0 := m2.Vec2{X1: fn2.X01, X2: fn2.X02}
