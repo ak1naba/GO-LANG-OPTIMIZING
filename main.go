@@ -154,15 +154,16 @@ func main() {
 	if errLP != nil {
 		log.Printf("Ошибка решения ЛП симплекс-методом: %v", errLP)
 	} else {
+		const lpMethodName = "Симплекс-метод"
 		txtName := fmt.Sprintf("%s/iter_lab3_simplex.txt", tablesDir)
-		if err := iterreport.SaveLP(txtName, "Двухфазный симплекс-метод", lpRes); err != nil {
+		if err := iterreport.SaveLP(txtName, lpMethodName, lpRes); err != nil {
 			log.Printf("Ошибка сохранения таблицы ЛП: %v", err)
 		} else {
 			fmt.Printf("Таблица результата ЛП сохранена: %s\n", txtName)
 		}
 
 		sep()
-		fmt.Printf("Метод:      %s\n", "Двухфазный симплекс-метод")
+		fmt.Printf("Метод:      %s\n", lpMethodName)
 		fmt.Printf("Статус     = %s\n", lpRes.Status)
 		if len(lpRes.X) > 0 {
 			fmt.Printf("x*        = (%.7f; %.7f)\n", lpRes.X[0], lpRes.X[1])

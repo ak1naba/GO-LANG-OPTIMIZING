@@ -109,7 +109,7 @@ func SaveLP(filename, methodName string, res ml.Result) error {
 
 	if len(res.Trace) > 0 {
 		b.WriteString("\nИтерационная таблица:\n")
-		b.WriteString("k\tphase\tenter\tleave\tF")
+		b.WriteString("k\tenter\tleave\tF")
 		for i := 0; i < varCount; i++ {
 			b.WriteString(fmt.Sprintf("\tx%d", i+1))
 		}
@@ -125,7 +125,7 @@ func SaveLP(filename, methodName string, res ml.Result) error {
 				leave = fmt.Sprintf("x%d", it.LeaveVar)
 			}
 
-			b.WriteString(fmt.Sprintf("%d\t%s\t%s\t%s\t%.10f", it.K, it.Phase, enter, leave, it.Objective))
+			b.WriteString(fmt.Sprintf("%d\t%s\t%s\t%.10f", it.K, enter, leave, it.Objective))
 			for i := 0; i < varCount; i++ {
 				v := 0.0
 				if i < len(it.X) {

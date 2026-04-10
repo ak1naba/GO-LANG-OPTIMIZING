@@ -14,6 +14,8 @@ const (
 	SenseEQ ConstraintSense = "="
 )
 
+const bigM = 1e6
+
 // Problem описывает задачу линейного программирования в канонической форме:
 // max c^T x, при ограничениях A*x <= b, x >= 0.
 type Problem struct {
@@ -37,7 +39,6 @@ type Result struct {
 // IterationLP хранит одну строку итерационной таблицы симплекс-метода.
 type IterationLP struct {
 	K         int
-	Phase     string
 	EnterVar  int
 	LeaveVar  int
 	Objective float64
@@ -52,8 +53,8 @@ const (
 	maxIter = 10_000
 )
 
-// SolveSimplex решает задачу ЛП методом двухфазного симплекс-метода.
-// Поддерживаются ограничения <=, >=, = и произвольные знаки правых частей.
+// SolveSimplex решает задачу ЛП обычным симплекс-методом.
+// Для ограничений >= и = используется метод искусственного базиса (M-задача).
 func SolveSimplex(p Problem, eps float64) (Result, error) {
 	if eps <= 0 || math.IsNaN(eps) || math.IsInf(eps, 0) {
 		return Result{}, errors.New("eps must be positive finite number")
@@ -161,114 +162,18 @@ func SolveSimplex(p Problem, eps float64) (Result, error) {
 
 	iter := 0
 	trace := make([]IterationLP, 0, 32)
-	if artCount > 0 {
-		// Фаза I: max(-sum(a_i)), где a_i — искусственные переменные.
-		for j := 0; j < totalVars; j++ {
-			if isArtificial[j] {
-				tab[m][j] = 1
-			}
-		}
-		for i := 0; i < m; i++ {
-			coef := tab[m][basis[i]]
-			if math.Abs(coef) <= eps {
-				continue
-			}
-			for j := 0; j < cols; j++ {
-				tab[m][j] -= coef * tab[i][j]
-			}
-		}
-		trace = appendTrace(trace, iter, "I", -1, -1, tab, basis, m, n, cols-1)
-
-		for iter < maxIter {
-			enterCol := chooseEntering(tab[m], cols-1, eps)
-			if enterCol == -1 {
-				break
-			}
-
-			leaveRow := chooseLeaving(tab, enterCol, m, cols-1, eps)
-			if leaveRow == -1 {
-				return Result{}, errors.New("phase I became unbounded unexpectedly")
-			}
-
-			leaveVar := basis[leaveRow]
-			pivot(tab, leaveRow, enterCol, rows, cols)
-			basis[leaveRow] = enterCol
-			iter++
-			trace = appendTrace(trace, iter, "I", enterCol, leaveVar, tab, basis, m, n, cols-1)
-		}
-		if iter >= maxIter {
-			return Result{}, errors.New("simplex reached iteration limit in phase I")
-		}
-
-		if tab[m][cols-1] < -eps {
-			return Result{
-				X:          nil,
-				Objective:  math.Inf(-1),
-				Iterations: iter,
-				Status:     statusInfeasible,
-				Trace:      trace,
-			}, nil
-		}
-
-		for i := 0; i < m; i++ {
-			if !isArtificial[basis[i]] {
-				continue
-			}
-			pivotCol := -1
-			for j := 0; j < totalVars; j++ {
-				if isArtificial[j] {
-					continue
-				}
-				if math.Abs(tab[i][j]) > eps {
-					pivotCol = j
-					break
-				}
-			}
-			if pivotCol != -1 {
-				pivot(tab, i, pivotCol, rows, cols)
-				basis[i] = pivotCol
-			}
-		}
-
-		keepCols := make([]int, 0, totalVars)
-		colMap := make([]int, totalVars)
-		for j := 0; j < totalVars; j++ {
-			if isArtificial[j] {
-				colMap[j] = -1
-				continue
-			}
-			colMap[j] = len(keepCols)
-			keepCols = append(keepCols, j)
-		}
-
-		newCols := len(keepCols) + 1
-		tab2 := make([][]float64, rows)
-		for i := 0; i < rows; i++ {
-			tab2[i] = make([]float64, newCols)
-			for newJ, oldJ := range keepCols {
-				tab2[i][newJ] = tab[i][oldJ]
-			}
-			tab2[i][newCols-1] = tab[i][cols-1]
-		}
-
-		for i := 0; i < m; i++ {
-			mapped := colMap[basis[i]]
-			if mapped == -1 {
-				return Result{}, errors.New("failed to eliminate artificial variable from basis")
-			}
-			basis[i] = mapped
-		}
-
-		tab = tab2
-		cols = newCols
-		totalVars = len(keepCols)
-	}
 
 	for j := 0; j < cols; j++ {
 		tab[m][j] = 0
 	}
 	for j := 0; j < n; j++ {
 		tab[m][j] = -p.C[j]
+	}
+	for j := 0; j < totalVars; j++ {
+		if isArtificial[j] {
+			// В M-задаче для max: z = c^T x - M * sum(a).
+			tab[m][j] = bigM
+		}
 	}
 	for i := 0; i < m; i++ {
 		coef := tab[m][basis[i]]
@@ -279,23 +184,35 @@ func SolveSimplex(p Problem, eps float64) (Result, error) {
 			tab[m][j] -= coef * tab[i][j]
 		}
 	}
-	trace = appendTrace(trace, iter, "II", -1, -1, tab, basis, m, n, cols-1)
+	trace = appendTrace(trace, iter, -1, -1, tab, basis, m, n, cols-1, p.C)
 
 	for iter < maxIter {
 		enterCol := chooseEntering(tab[m], cols-1, eps)
 		if enterCol == -1 {
+			infeasible := false
+			for i := 0; i < m; i++ {
+				if isArtificial[basis[i]] && tab[i][cols-1] > eps {
+					infeasible = true
+					break
+				}
+			}
 			x := make([]float64, n)
 			for i := 0; i < m; i++ {
 				if basis[i] < n {
 					x[basis[i]] = tab[i][cols-1]
 				}
 			}
+			obj := objectiveValue(p.C, x)
+			status := statusOptimal
+			if infeasible {
+				status = statusInfeasible
+			}
 
 			return Result{
 				X:          x,
-				Objective:  tab[m][cols-1],
+				Objective:  obj,
 				Iterations: iter,
-				Status:     statusOptimal,
+				Status:     status,
 				Trace:      trace,
 			}, nil
 		}
@@ -315,14 +232,14 @@ func SolveSimplex(p Problem, eps float64) (Result, error) {
 		pivot(tab, leaveRow, enterCol, rows, cols)
 		basis[leaveRow] = enterCol
 		iter++
-		trace = appendTrace(trace, iter, "II", enterCol, leaveVar, tab, basis, m, n, cols-1)
+		trace = appendTrace(trace, iter, enterCol, leaveVar, tab, basis, m, n, cols-1, p.C)
 	}
 
 	return Result{}, errors.New("simplex reached iteration limit")
 }
 
-func appendTrace(trace []IterationLP, iter int, phase string, enterCol, leaveVar int,
-	tab [][]float64, basis []int, m, n, rhsCol int,
+func appendTrace(trace []IterationLP, iter int, enterCol, leaveVar int,
+	tab [][]float64, basis []int, m, n, rhsCol int, c []float64,
 ) []IterationLP {
 	x := extractPrimal(tab, basis, m, n, rhsCol)
 	ent := 0
@@ -336,10 +253,9 @@ func appendTrace(trace []IterationLP, iter int, phase string, enterCol, leaveVar
 
 	trace = append(trace, IterationLP{
 		K:         iter,
-		Phase:     phase,
 		EnterVar:  ent,
 		LeaveVar:  lev,
-		Objective: tab[m][rhsCol],
+		Objective: objectiveValue(c, x),
 		X:         x,
 	})
 	return trace
@@ -353,6 +269,14 @@ func extractPrimal(tab [][]float64, basis []int, m, n, rhsCol int) []float64 {
 		}
 	}
 	return x
+}
+
+func objectiveValue(c, x []float64) float64 {
+	v := 0.0
+	for i := 0; i < len(c) && i < len(x); i++ {
+		v += c[i] * x[i]
+	}
+	return v
 }
 
 func flipSense(s ConstraintSense) ConstraintSense {
