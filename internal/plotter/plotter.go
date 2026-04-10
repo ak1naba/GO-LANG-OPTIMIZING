@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"sort"
+
+	ml "optimization/internal/methods/linear"
 
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"
+	"gonum.org/v1/plot/vg/draw"
 )
 
 // Func — тип функции одной переменной (совместим с fn1.F, fn1.DF, fn1.D2F).
@@ -299,4 +303,303 @@ func PlotSurface(title string, x1min, x1max, x2min, x2max float64, n int, filena
 		return fmt.Errorf("Save(%q): %w", filename, err)
 	}
 	return nil
+}
+
+// PlotLP2D строит график задачи ЛП в 2D:
+// границы ограничений, допустимую область, оптимальную точку и линию уровня цели.
+func PlotLP2D(title, filename string, prob ml.Problem, res *ml.Result) error {
+	if len(prob.C) != 2 {
+		return fmt.Errorf("PlotLP2D supports only 2 variables, got %d", len(prob.C))
+	}
+	if len(prob.A) != len(prob.B) {
+		return fmt.Errorf("A rows mismatch with B: %d vs %d", len(prob.A), len(prob.B))
+	}
+
+	sense := make([]ml.ConstraintSense, len(prob.B))
+	if len(prob.Sense) == 0 {
+		for i := range sense {
+			sense[i] = ml.SenseLE
+		}
+	} else {
+		if len(prob.Sense) != len(prob.B) {
+			return fmt.Errorf("Sense len mismatch: %d vs %d", len(prob.Sense), len(prob.B))
+		}
+		copy(sense, prob.Sense)
+	}
+
+	type line2 struct {
+		a, b, c float64
+	}
+
+	lines := make([]line2, 0, len(prob.A)+2)
+	for i := range prob.A {
+		if len(prob.A[i]) != 2 {
+			return fmt.Errorf("A[%d] must have 2 columns, got %d", i, len(prob.A[i]))
+		}
+		lines = append(lines, line2{a: prob.A[i][0], b: prob.A[i][1], c: prob.B[i]})
+	}
+	// x1 = 0, x2 = 0
+	lines = append(lines, line2{a: 1, b: 0, c: 0}, line2{a: 0, b: 1, c: 0})
+
+	const eps = 1e-8
+	isFeasible := func(x, y float64) bool {
+		if x < -eps || y < -eps {
+			return false
+		}
+		for i := range prob.A {
+			lhs := prob.A[i][0]*x + prob.A[i][1]*y
+			s := sense[i]
+			switch s {
+			case ml.SenseLE:
+				if lhs-prob.B[i] > eps {
+					return false
+				}
+			case ml.SenseGE:
+				if prob.B[i]-lhs > eps {
+					return false
+				}
+			case ml.SenseEQ:
+				if math.Abs(lhs-prob.B[i]) > eps {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	}
+
+	intersect := func(l1, l2 line2) (plotter.XY, bool) {
+		det := l1.a*l2.b - l2.a*l1.b
+		if math.Abs(det) <= eps {
+			return plotter.XY{}, false
+		}
+		x := (l1.c*l2.b - l2.c*l1.b) / det
+		y := (l1.a*l2.c - l2.a*l1.c) / det
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) {
+			return plotter.XY{}, false
+		}
+		return plotter.XY{X: x, Y: y}, true
+	}
+
+	unique := make([]plotter.XY, 0)
+	addUnique := func(p plotter.XY) {
+		for _, q := range unique {
+			if math.Abs(p.X-q.X) <= 1e-6 && math.Abs(p.Y-q.Y) <= 1e-6 {
+				return
+			}
+		}
+		unique = append(unique, p)
+	}
+
+	for i := 0; i < len(lines); i++ {
+		for j := i + 1; j < len(lines); j++ {
+			p, ok := intersect(lines[i], lines[j])
+			if !ok {
+				continue
+			}
+			if isFeasible(p.X, p.Y) {
+				addUnique(p)
+			}
+		}
+	}
+
+	if len(unique) == 0 {
+		return fmt.Errorf("no feasible points for plotting")
+	}
+
+	feasibleHull := convexHull(unique)
+	if len(feasibleHull) < 3 {
+		return fmt.Errorf("feasible set is degenerate and cannot be filled")
+	}
+
+	xMin, xMax := feasibleHull[0].X, feasibleHull[0].X
+	yMin, yMax := feasibleHull[0].Y, feasibleHull[0].Y
+	for _, p := range feasibleHull {
+		if p.X < xMin {
+			xMin = p.X
+		}
+		if p.X > xMax {
+			xMax = p.X
+		}
+		if p.Y < yMin {
+			yMin = p.Y
+		}
+		if p.Y > yMax {
+			yMax = p.Y
+		}
+	}
+
+	if res != nil && len(res.X) >= 2 {
+		if res.X[0] > xMax {
+			xMax = res.X[0]
+		}
+		if res.X[1] > yMax {
+			yMax = res.X[1]
+		}
+	}
+
+	xPad := 0.12 * math.Max(1, xMax-xMin)
+	yPad := 0.12 * math.Max(1, yMax-yMin)
+	xMin = math.Max(0, xMin-xPad)
+	yMin = math.Max(0, yMin-yPad)
+	xMax += xPad
+	yMax += yPad
+
+	p := plot.New()
+	p.Title.Text = title
+	p.X.Label.Text = "x1"
+	p.Y.Label.Text = "x2"
+	p.Add(plotter.NewGrid())
+	p.X.Min, p.X.Max = xMin, xMax
+	p.Y.Min, p.Y.Max = yMin, yMax
+
+	polyPts := make(plotter.XYs, len(feasibleHull))
+	copy(polyPts, feasibleHull)
+	poly, err := plotter.NewPolygon(polyPts)
+	if err != nil {
+		return fmt.Errorf("NewPolygon(feasible): %w", err)
+	}
+	poly.Color = color.RGBA{R: 153, G: 196, B: 255, A: 110}
+	poly.LineStyle.Color = color.RGBA{R: 35, G: 78, B: 140, A: 220}
+	poly.LineStyle.Width = vg.Points(1.2)
+	p.Add(poly)
+	p.Legend.Add("допустимая область", poly)
+
+	for i := range prob.A {
+		linePts, ok := constraintSegment(prob.A[i][0], prob.A[i][1], prob.B[i], xMin, xMax, yMin, yMax)
+		if !ok {
+			continue
+		}
+		ln, err := plotter.NewLine(linePts)
+		if err != nil {
+			return fmt.Errorf("NewLine(constraint %d): %w", i+1, err)
+		}
+		ln.LineStyle.Width = vg.Points(1.6)
+		ln.LineStyle.Color = lineColors[i%len(lineColors)]
+		ln.LineStyle.Dashes = dashStyles[(i+1)%len(dashStyles)]
+		p.Add(ln)
+		p.Legend.Add(fmt.Sprintf("огр. %d", i+1), ln)
+	}
+
+	if res != nil && len(res.X) >= 2 {
+		xStar := res.X[0]
+		yStar := res.X[1]
+		optPts := plotter.XYs{{X: xStar, Y: yStar}}
+		sc, err := plotter.NewScatter(optPts)
+		if err != nil {
+			return fmt.Errorf("NewScatter(opt): %w", err)
+		}
+		sc.Shape = draw.CrossGlyph{}
+		sc.Radius = vg.Points(5)
+		sc.Color = color.RGBA{R: 200, G: 40, B: 40, A: 255}
+		p.Add(sc)
+		p.Legend.Add("оптимум", sc)
+
+		objPts, ok := objectiveSegment(prob.C[0], prob.C[1], res.Objective, xMin, xMax, yMin, yMax)
+		if ok {
+			objLine, err := plotter.NewLine(objPts)
+			if err != nil {
+				return fmt.Errorf("NewLine(objective): %w", err)
+			}
+			objLine.LineStyle.Width = vg.Points(2)
+			objLine.LineStyle.Color = color.RGBA{R: 200, G: 40, B: 40, A: 255}
+			objLine.LineStyle.Dashes = []vg.Length{vg.Points(7), vg.Points(4)}
+			p.Add(objLine)
+			p.Legend.Add("F = const (в оптимуме)", objLine)
+		}
+	}
+
+	if err := p.Save(11*vg.Inch, 8*vg.Inch, filename); err != nil {
+		return fmt.Errorf("Save(%q): %w", filename, err)
+	}
+	return nil
+}
+
+func constraintSegment(a, b, c, xMin, xMax, yMin, yMax float64) (plotter.XYs, bool) {
+	const eps = 1e-10
+	pts := make([]plotter.XY, 0, 4)
+	add := func(x, y float64) {
+		if x < xMin-1e-8 || x > xMax+1e-8 || y < yMin-1e-8 || y > yMax+1e-8 {
+			return
+		}
+		for _, p := range pts {
+			if math.Abs(p.X-x) <= 1e-6 && math.Abs(p.Y-y) <= 1e-6 {
+				return
+			}
+		}
+		pts = append(pts, plotter.XY{X: x, Y: y})
+	}
+
+	if math.Abs(b) > eps {
+		add(xMin, (c-a*xMin)/b)
+		add(xMax, (c-a*xMax)/b)
+	}
+	if math.Abs(a) > eps {
+		add((c-b*yMin)/a, yMin)
+		add((c-b*yMax)/a, yMax)
+	}
+
+	if len(pts) < 2 {
+		return nil, false
+	}
+	if len(pts) > 2 {
+		maxD := -1.0
+		bestI, bestJ := 0, 1
+		for i := 0; i < len(pts); i++ {
+			for j := i + 1; j < len(pts); j++ {
+				dx := pts[i].X - pts[j].X
+				dy := pts[i].Y - pts[j].Y
+				d := dx*dx + dy*dy
+				if d > maxD {
+					maxD = d
+					bestI, bestJ = i, j
+				}
+			}
+		}
+		return plotter.XYs{pts[bestI], pts[bestJ]}, true
+	}
+	return plotter.XYs{pts[0], pts[1]}, true
+}
+
+func objectiveSegment(c1, c2, val, xMin, xMax, yMin, yMax float64) (plotter.XYs, bool) {
+	return constraintSegment(c1, c2, val, xMin, xMax, yMin, yMax)
+}
+
+func convexHull(points []plotter.XY) plotter.XYs {
+	if len(points) <= 1 {
+		return append(plotter.XYs(nil), points...)
+	}
+
+	pts := append([]plotter.XY(nil), points...)
+	sort.Slice(pts, func(i, j int) bool {
+		if pts[i].X == pts[j].X {
+			return pts[i].Y < pts[j].Y
+		}
+		return pts[i].X < pts[j].X
+	})
+
+	cross := func(o, a, b plotter.XY) float64 {
+		return (a.X-o.X)*(b.Y-o.Y) - (a.Y-o.Y)*(b.X-o.X)
+	}
+
+	lower := make([]plotter.XY, 0, len(pts))
+	for _, p := range pts {
+		for len(lower) >= 2 && cross(lower[len(lower)-2], lower[len(lower)-1], p) <= 0 {
+			lower = lower[:len(lower)-1]
+		}
+		lower = append(lower, p)
+	}
+
+	upper := make([]plotter.XY, 0, len(pts))
+	for i := len(pts) - 1; i >= 0; i-- {
+		p := pts[i]
+		for len(upper) >= 2 && cross(upper[len(upper)-2], upper[len(upper)-1], p) <= 0 {
+			upper = upper[:len(upper)-1]
+		}
+		upper = append(upper, p)
+	}
+
+	hull := append(lower[:len(lower)-1], upper[:len(upper)-1]...)
+	return plotter.XYs(hull)
 }

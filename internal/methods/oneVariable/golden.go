@@ -1,6 +1,9 @@
 package methods
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // GoldenSection реализует метод золотого сечения.
 //
@@ -28,8 +31,19 @@ func (GoldenSection) Minimize(f, _, _ Func, a, b, eps float64) Result {
 	f2 := f(x2)
 
 	iter := 0
+	trace := make([]Iteration1D, 0, 256)
 	for (b - a) > eps {
 		iter++
+		xMid := (a + b) / 2
+		trace = append(trace, Iteration1D{
+			K:    iter,
+			A:    a,
+			B:    b,
+			X:    xMid,
+			FX:   f(xMid),
+			Meta: fmt.Sprintf("x1=%.10f; x2=%.10f; f1=%.10f; f2=%.10f", x1, x2, f1, f2),
+		})
+
 		if f1 > f2 {
 			// минимум правее x1, сужаем левую границу
 			a = x1
@@ -50,5 +64,6 @@ func (GoldenSection) Minimize(f, _, _ Func, a, b, eps float64) Result {
 		XMin:       xMin,
 		FMin:       f(xMin),
 		Iterations: iter,
+		Trace:      trace,
 	}
 }

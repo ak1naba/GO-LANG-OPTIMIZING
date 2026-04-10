@@ -1,5 +1,7 @@
 package methods
 
+import "fmt"
+
 // GradientConst реализует градиентный метод с постоянным шагом (дроблением шага).
 type GradientConst struct {
 	Alpha0 float64 // начальный шаг; если 0 — используется 0.5
@@ -19,9 +21,21 @@ func (m GradientConst) Minimize2D(f Func2, grad GradFunc2, x0 Vec2, eps float64)
 
 	x := x0
 	iter := 0
+	trace := make([]Iteration2D, 0, 512)
 
 	for iter < maxIter {
 		g1, g2 := grad(x.X1, x.X2)
+		gNorm := Norm2(g1, g2)
+		trace = append(trace, Iteration2D{
+			K:     iter + 1,
+			X1:    x.X1,
+			X2:    x.X2,
+			FX:    f(x.X1, x.X2),
+			GNorm: gNorm,
+			Step:  0,
+			Meta:  "",
+		})
+
 		if Norm2(g1, g2) < eps {
 			break
 		}
@@ -34,16 +48,19 @@ func (m GradientConst) Minimize2D(f Func2, grad GradFunc2, x0 Vec2, eps float64)
 			xNew := Vec2{x.X1 - alpha*g1, x.X2 - alpha*g2}
 			if f(xNew.X1, xNew.X2) < fx {
 				x = xNew
+				trace[len(trace)-1].Step = alpha
+				trace[len(trace)-1].Meta = fmt.Sprintf("accepted alpha=%.10f", alpha)
 				moved = true
 				break
 			}
 			alpha /= 2
 		}
 		if !moved {
+			trace[len(trace)-1].Meta = "step became too small"
 			break // шаг стал ничтожным — сошлись
 		}
 		iter++
 	}
 
-	return Result2{X: x, FMin: f(x.X1, x.X2), Iterations: iter}
+	return Result2{X: x, FMin: f(x.X1, x.X2), Iterations: iter, Trace: trace}
 }

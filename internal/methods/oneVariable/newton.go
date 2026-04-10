@@ -1,6 +1,9 @@
 package methods
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // Newton реализует метод Ньютона для минимизации (метод второго порядка).
 //
@@ -23,16 +26,27 @@ func (Newton) Minimize(f, df, d2f Func, a, b, eps float64) Result {
 	//x := (a + b) / 2
 	x := 0.25
 	iter := 0
+	trace := make([]Iteration1D, 0, 128)
 
 	for {
 		iter++
 
+		d1 := df(x)
 		d2 := d2f(x)
+		trace = append(trace, Iteration1D{
+			K:    iter,
+			A:    a,
+			B:    b,
+			X:    x,
+			FX:   f(x),
+			Meta: fmt.Sprintf("f'(x)=%.10f; f''(x)=%.10f", d1, d2),
+		})
+
 		if math.Abs(d2) < 1e-15 {
 			break // вторая производная близка к нулю — метод неприменим
 		}
 
-		xNew := x - df(x)/d2
+		xNew := x - d1/d2
 
 		// защита от выхода за пределы отрезка
 		if xNew < a {
@@ -53,5 +67,6 @@ func (Newton) Minimize(f, df, d2f Func, a, b, eps float64) Result {
 		XMin:       x,
 		FMin:       f(x),
 		Iterations: iter,
+		Trace:      trace,
 	}
 }

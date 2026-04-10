@@ -1,6 +1,9 @@
 package methods
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // Tangent реализует метод касательных (метод первого порядка).
 //
@@ -24,6 +27,7 @@ func (Tangent) Name() string {
 
 func (Tangent) Minimize(f, df, _ Func, a, b, eps float64) Result {
 	iter := 0
+	trace := make([]Iteration1D, 0, 256)
 	for (b - a) > eps {
 		iter++
 
@@ -35,6 +39,14 @@ func (Tangent) Minimize(f, df, _ Func, a, b, eps float64) Result {
 
 		// пересечение касательных
 		xNew := (f(b) - f(a) + fa*a - fb*b) / denom
+		trace = append(trace, Iteration1D{
+			K:    iter,
+			A:    a,
+			B:    b,
+			X:    xNew,
+			FX:   f(xNew),
+			Meta: fmt.Sprintf("df(a)=%.10f; df(b)=%.10f", fa, fb),
+		})
 
 		// защита от выхода за границы из-за численных ошибок
 		if xNew < a {
@@ -56,5 +68,6 @@ func (Tangent) Minimize(f, df, _ Func, a, b, eps float64) Result {
 		XMin:       xMin,
 		FMin:       f(xMin),
 		Iterations: iter,
+		Trace:      trace,
 	}
 }

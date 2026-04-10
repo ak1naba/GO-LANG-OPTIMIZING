@@ -1,6 +1,9 @@
 package methods
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // GradientOptimal реализует метод наискорейшего спуска (оптимальный шаг).
 
@@ -18,10 +21,22 @@ func (GradientOptimal) Minimize2D(f Func2, grad GradFunc2, x0 Vec2, eps float64)
 
 	x := x0
 	iter := 0
+	trace := make([]Iteration2D, 0, 512)
 
 	for iter < maxIter {
 		g1, g2 := grad(x.X1, x.X2)
-		if Norm2(g1, g2) < eps {
+		gNorm := Norm2(g1, g2)
+		trace = append(trace, Iteration2D{
+			K:     iter + 1,
+			X1:    x.X1,
+			X2:    x.X2,
+			FX:    f(x.X1, x.X2),
+			GNorm: gNorm,
+			Step:  0,
+			Meta:  "",
+		})
+
+		if gNorm < eps {
 			break
 		}
 
@@ -30,12 +45,14 @@ func (GradientOptimal) Minimize2D(f Func2, grad GradFunc2, x0 Vec2, eps float64)
 			return f(x.X1-alpha*g1, x.X2-alpha*g2)
 		}
 		alphaOpt := goldenLine(phi, 0, alphaMax, eps)
+		trace[len(trace)-1].Step = alphaOpt
+		trace[len(trace)-1].Meta = fmt.Sprintf("alpha*=%.10f", alphaOpt)
 
 		x = Vec2{x.X1 - alphaOpt*g1, x.X2 - alphaOpt*g2}
 		iter++
 	}
 
-	return Result2{X: x, FMin: f(x.X1, x.X2), Iterations: iter}
+	return Result2{X: x, FMin: f(x.X1, x.X2), Iterations: iter, Trace: trace}
 }
 
 // goldenLine — метод золотого сечения для функции одной переменной на [a, b].

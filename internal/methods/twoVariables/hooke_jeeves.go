@@ -1,5 +1,7 @@
 package methods
 
+import "fmt"
+
 // HookeJeeves реализует метод Хука–Дживса (поисковый метод без градиента).
 
 type HookeJeeves struct {
@@ -30,13 +32,27 @@ func (m HookeJeeves) Minimize2D(f Func2, _ GradFunc2, x0 Vec2, eps float64) Resu
 
 	base := x0
 	iter := 0
+	trace := make([]Iteration2D, 0, 512)
 
 	for iter < maxIter && step >= eps {
+		iter++
 		explored, improved := hookeExplore(f, base, step)
+		meta := "reduced step"
 		if !improved {
+			trace = append(trace, Iteration2D{
+				K:     iter,
+				X1:    base.X1,
+				X2:    base.X2,
+				FX:    f(base.X1, base.X2),
+				GNorm: 0,
+				Step:  step,
+				Meta:  meta,
+			})
 			step *= reduction
 			continue
 		}
+
+		meta = "explore improved"
 
 		for iter < maxIter {
 			// pattern move: продолжаем движение в успешном направлении.
@@ -49,17 +65,25 @@ func (m HookeJeeves) Minimize2D(f Func2, _ GradFunc2, x0 Vec2, eps float64) Resu
 			if patternImproved && f(patternExplored.X1, patternExplored.X2) < f(explored.X1, explored.X2) {
 				base = explored
 				explored = patternExplored
-				iter++
+				meta = "pattern improved"
 				continue
 			}
 
 			base = explored
-			iter++
+			trace = append(trace, Iteration2D{
+				K:     iter,
+				X1:    base.X1,
+				X2:    base.X2,
+				FX:    f(base.X1, base.X2),
+				GNorm: 0,
+				Step:  step,
+				Meta:  fmt.Sprintf("%s; accepted new base", meta),
+			})
 			break
 		}
 	}
 
-	return Result2{X: base, FMin: f(base.X1, base.X2), Iterations: iter}
+	return Result2{X: base, FMin: f(base.X1, base.X2), Iterations: iter, Trace: trace}
 }
 
 func hookeExplore(f Func2, start Vec2, step float64) (Vec2, bool) {
