@@ -11,6 +11,9 @@ type Func2 func(x1, x2 float64) float64
 // GradFunc2 — градиент функции двух переменных; возвращает (∂f/∂x1, ∂f/∂x2).
 type GradFunc2 func(x1, x2 float64) (float64, float64)
 
+// Constraint2D задает ограничение в виде c(x1, x2) <= 0.
+type Constraint2D func(x1, x2 float64) float64
+
 // Iteration2D хранит одну строку итерационной таблицы для 2D-методов.
 type Iteration2D struct {
 	K     int

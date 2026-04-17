@@ -18,8 +18,9 @@ import (
 )
 
 func main() {
+	const defaultEps = 1e-6
 	// Точность задаётся флагом -eps
-	eps := flag.Float64("eps", fn1.Eps, "Точность вычислений (например: 1e-6, 1e-9 и т.д.)")
+	eps := flag.Float64("eps", defaultEps, "Точность вычислений (например: 1e-6, 1e-9 и т.д.)")
 	flag.Parse()
 
 	graphicsDir := "output/graphics"
@@ -61,8 +62,8 @@ func main() {
 		}
 		sep()
 		fmt.Printf("Метод:      %s\n", opt.Name())
-		fmt.Printf("x*        = %.7f\n", res.XMin)
-		fmt.Printf("f(x*)     = %.7f\n", res.FMin)
+		fmt.Printf("x*        = %.6f\n", res.XMin)
+		fmt.Printf("f(x*)     = %.6f\n", res.FMin)
 		fmt.Printf("Итераций  = %d\n", res.Iterations)
 	}
 	sep()
@@ -105,9 +106,48 @@ func main() {
 		}
 		sep()
 		fmt.Printf("Метод:      %s\n", opt.Name())
-		fmt.Printf("x*        = (%.7f; %.7f)\n", res.X.X1, res.X.X2)
-		fmt.Printf("f(x*)     = %.7f\n", res.FMin)
+		fmt.Printf("x*        = (%.6f; %.6f)\n", res.X.X1, res.X.X2)
+		fmt.Printf("f(x*)     = %.6f\n", res.FMin)
 		fmt.Printf("Итераций  = %d\n", res.Iterations)
+	}
+	sep()
+
+	// Лабораторная работа №4
+	fmt.Println()
+	fmt.Println("Лабораторная работа №4. Условная минимизация методом штрафных функций")
+	fmt.Println("Целевая функция: f(x1,x2) = x1² + 3x2² + cos(x1+x2)")
+	fmt.Println("Ограничения:")
+	fmt.Println("  x1 + x2 - 0.5 <= 0")
+	fmt.Println("  x1 >= 0")
+	fmt.Println("  x2 >= 0")
+	fmt.Printf("Начальная точка: x̄₀ = (%.1f; %.1f),  точность: %.0e\n\n", fn2.X01, fn2.X02, *eps)
+
+	penaltyOptimizer := m2.PenaltyMethod{
+		Inequalities: []m2.Constraint2D{
+			func(x1, x2 float64) float64 { return x1 + x2 - 0.5 },
+			func(x1, _ float64) float64 { return -x1 },
+			func(_ float64, x2 float64) float64 { return -x2 },
+		},
+		Mu0:      1,
+		Beta:     10,
+		MaxOuter: 30,
+	}
+
+	penaltyRes := penaltyOptimizer.Minimize2D(fn2.F2, fn2.GradF2, x0, *eps)
+	txtNameLab4 := fmt.Sprintf("%s/iter_lab4_method_1.txt", tablesDir)
+	if err := iterreport.Save2D(txtNameLab4, penaltyOptimizer.Name(), penaltyRes); err != nil {
+		log.Printf("Ошибка сохранения таблицы итераций ЛР4: %v", err)
+	} else {
+		fmt.Printf("Таблица итераций сохранена: %s\n", txtNameLab4)
+	}
+	sep()
+	fmt.Printf("Метод:      %s\n", penaltyOptimizer.Name())
+	fmt.Printf("x*        = (%.6f; %.6f)\n", penaltyRes.X.X1, penaltyRes.X.X2)
+	fmt.Printf("f(x*)     = %.6f\n", penaltyRes.FMin)
+	fmt.Printf("Итераций  = %d\n", penaltyRes.Iterations)
+	if len(penaltyRes.Trace) > 0 {
+		last := penaltyRes.Trace[len(penaltyRes.Trace)-1]
+		fmt.Printf("Нарушение ограничений (штраф) = %.6e\n", last.GNorm)
 	}
 	sep()
 
@@ -166,9 +206,9 @@ func main() {
 		fmt.Printf("Метод:      %s\n", lpMethodName)
 		fmt.Printf("Статус     = %s\n", lpRes.Status)
 		if len(lpRes.X) > 0 {
-			fmt.Printf("x*        = (%.7f; %.7f)\n", lpRes.X[0], lpRes.X[1])
+			fmt.Printf("x*        = (%.6f; %.6f)\n", lpRes.X[0], lpRes.X[1])
 		}
-		fmt.Printf("F(x*)     = %.7f\n", lpRes.Objective)
+		fmt.Printf("F(x*)     = %.6f\n", lpRes.Objective)
 		fmt.Printf("Итераций  = %d\n", lpRes.Iterations)
 	}
 
