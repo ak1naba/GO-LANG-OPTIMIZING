@@ -122,15 +122,29 @@ func main() {
 	fmt.Println("  x2 >= 0")
 	fmt.Printf("Начальная точка: x̄₀ = (%.1f; %.1f),  точность: %.0e\n\n", fn2.X01, fn2.X02, *eps)
 
+	penaltyA := [][]float64{
+		{1, 1},
+		{-1, 0},
+		{0, -1},
+	}
+	penaltyB := []float64{0.5, 0, 0}
+	penaltySense := []ml.ConstraintSense{ml.SenseLE, ml.SenseLE, ml.SenseLE}
+
+	penaltyConstraints := make([]m2.Constraint2D, 0, len(penaltyA))
+	for i := range penaltyA {
+		a1 := penaltyA[i][0]
+		a2 := penaltyA[i][1]
+		b := penaltyB[i]
+		penaltyConstraints = append(penaltyConstraints, func(x1, x2 float64) float64 {
+			return a1*x1 + a2*x2 - b
+		})
+	}
+
 	penaltyOptimizer := m2.PenaltyMethod{
-		Inequalities: []m2.Constraint2D{
-			func(x1, x2 float64) float64 { return x1 + x2 - 0.5 },
-			func(x1, _ float64) float64 { return -x1 },
-			func(_ float64, x2 float64) float64 { return -x2 },
-		},
-		Mu0:      1,
-		Beta:     10,
-		MaxOuter: 30,
+		Inequalities: penaltyConstraints,
+		Mu0:          1,
+		Beta:         10,
+		MaxOuter:     30,
 	}
 
 	penaltyRes := penaltyOptimizer.Minimize2D(fn2.F2, fn2.GradF2, x0, *eps)
@@ -150,6 +164,24 @@ func main() {
 		fmt.Printf("Нарушение ограничений (штраф) = %.6e\n", last.GNorm)
 	}
 	sep()
+
+	errPenaltyPlot := plotter.PlotConstrainedContour(
+		"Лаб. №4 · f(x₁,x₂) и ограничения (метод штрафных функций)",
+		graphicsDir+"/lab4_penalty_contour.png",
+		-0.2, 1.2, -0.2, 1.2,
+		200, 20,
+		fn2.F2,
+		penaltyA,
+		penaltyB,
+		penaltySense,
+		penaltyRes.X.X1,
+		penaltyRes.X.X2,
+	)
+	if errPenaltyPlot != nil {
+		log.Printf("Ошибка построения графика ЛР4: %v", errPenaltyPlot)
+	} else {
+		fmt.Println("График ЛР4 сохранён: output/graphics/lab4_penalty_contour.png")
+	}
 
 	// Контурный график функции двух переменных
 	err2 := plotter.PlotContour(

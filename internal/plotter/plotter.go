@@ -305,6 +305,205 @@ func PlotSurface(title string, x1min, x1max, x2min, x2max float64, n int, filena
 	return nil
 }
 
+// PlotConstrainedContour строит контурный график функции f(x1, x2)
+// и наносит линейные ограничения в виде a1*x1 + a2*x2 (<=|>=|=) b,
+// а также допустимую область и найденную точку x*.
+func PlotConstrainedContour(
+	title, filename string,
+	x1min, x1max, x2min, x2max float64,
+	n, nLevels int,
+	f Func2,
+	A [][]float64,
+	B []float64,
+	sense []ml.ConstraintSense,
+	xStarX, xStarY float64,
+) error {
+	if len(A) != len(B) {
+		return fmt.Errorf("A rows mismatch with B: %d vs %d", len(A), len(B))
+	}
+	if len(A) == 0 {
+		return fmt.Errorf("empty constraints")
+	}
+
+	if n < 2 {
+		n = 100
+	}
+	if nLevels < 2 {
+		nLevels = 15
+	}
+
+	consSense := make([]ml.ConstraintSense, len(B))
+	if len(sense) == 0 {
+		for i := range consSense {
+			consSense[i] = ml.SenseLE
+		}
+	} else {
+		if len(sense) != len(B) {
+			return fmt.Errorf("Sense len mismatch: %d vs %d", len(sense), len(B))
+		}
+		copy(consSense, sense)
+	}
+
+	x1s := make([]float64, n)
+	x2s := make([]float64, n)
+	dx1 := (x1max - x1min) / float64(n-1)
+	dx2 := (x2max - x2min) / float64(n-1)
+	for i := range x1s {
+		x1s[i] = x1min + float64(i)*dx1
+		x2s[i] = x2min + float64(i)*dx2
+	}
+
+	g := funcGrid{f: f, x1s: x1s, x2s: x2s}
+	zMin, zMax := math.Inf(1), math.Inf(-1)
+	for _, x1 := range x1s {
+		for _, x2 := range x2s {
+			z := f(x1, x2)
+			if z < zMin {
+				zMin = z
+			}
+			if z > zMax {
+				zMax = z
+			}
+		}
+	}
+	levels := make([]float64, nLevels)
+	for i := range levels {
+		levels[i] = zMin + float64(i)*(zMax-zMin)/float64(nLevels-1)
+	}
+
+	const eps = 1e-8
+	isFeasible := func(x, y float64) bool {
+		for i := range A {
+			if len(A[i]) != 2 {
+				return false
+			}
+			lhs := A[i][0]*x + A[i][1]*y
+			s := consSense[i]
+			switch s {
+			case ml.SenseLE:
+				if lhs-B[i] > eps {
+					return false
+				}
+			case ml.SenseGE:
+				if B[i]-lhs > eps {
+					return false
+				}
+			case ml.SenseEQ:
+				if math.Abs(lhs-B[i]) > eps {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	}
+
+	type line2 struct {
+		a, b, c float64
+	}
+	intersect := func(l1, l2 line2) (plotter.XY, bool) {
+		det := l1.a*l2.b - l2.a*l1.b
+		if math.Abs(det) <= eps {
+			return plotter.XY{}, false
+		}
+		x := (l1.c*l2.b - l2.c*l1.b) / det
+		y := (l1.a*l2.c - l2.a*l1.c) / det
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) {
+			return plotter.XY{}, false
+		}
+		return plotter.XY{X: x, Y: y}, true
+	}
+
+	lines := make([]line2, 0, len(A))
+	for i := range A {
+		if len(A[i]) != 2 {
+			return fmt.Errorf("A[%d] must have 2 columns, got %d", i, len(A[i]))
+		}
+		lines = append(lines, line2{a: A[i][0], b: A[i][1], c: B[i]})
+	}
+
+	unique := make([]plotter.XY, 0)
+	addUnique := func(p plotter.XY) {
+		for _, q := range unique {
+			if math.Abs(p.X-q.X) <= 1e-6 && math.Abs(p.Y-q.Y) <= 1e-6 {
+				return
+			}
+		}
+		unique = append(unique, p)
+	}
+
+	for i := 0; i < len(lines); i++ {
+		for j := i + 1; j < len(lines); j++ {
+			p, ok := intersect(lines[i], lines[j])
+			if !ok {
+				continue
+			}
+			if isFeasible(p.X, p.Y) {
+				addUnique(p)
+			}
+		}
+	}
+
+	cp := plot.New()
+	cp.Title.Text = title
+	cp.X.Label.Text = "x1"
+	cp.Y.Label.Text = "x2"
+	cp.X.Min, cp.X.Max = x1min, x1max
+	cp.Y.Min, cp.Y.Max = x2min, x2max
+	cp.Add(plotter.NewGrid())
+
+	contour := plotter.NewContour(g, levels, heatPalette{nLevels})
+	cp.Add(contour)
+
+	if len(unique) >= 3 {
+		feasibleHull := convexHull(unique)
+		if len(feasibleHull) >= 3 {
+			poly, err := plotter.NewPolygon(feasibleHull)
+			if err != nil {
+				return fmt.Errorf("NewPolygon(feasible): %w", err)
+			}
+			poly.Color = color.RGBA{R: 138, G: 201, B: 120, A: 90}
+			poly.LineStyle.Color = color.RGBA{R: 38, G: 70, B: 83, A: 220}
+			poly.LineStyle.Width = vg.Points(1.1)
+			cp.Add(poly)
+			cp.Legend.Add("допустимая область", poly)
+		}
+	}
+
+	for i := range A {
+		linePts, ok := constraintSegment(A[i][0], A[i][1], B[i], x1min, x1max, x2min, x2max)
+		if !ok {
+			continue
+		}
+		ln, err := plotter.NewLine(linePts)
+		if err != nil {
+			return fmt.Errorf("NewLine(constraint %d): %w", i+1, err)
+		}
+		ln.LineStyle.Width = vg.Points(1.6)
+		ln.LineStyle.Color = lineColors[i%len(lineColors)]
+		ln.LineStyle.Dashes = dashStyles[(i+1)%len(dashStyles)]
+		cp.Add(ln)
+		cp.Legend.Add(fmt.Sprintf("огр. %d", i+1), ln)
+	}
+
+	optPts := plotter.XYs{{X: xStarX, Y: xStarY}}
+	sc, err := plotter.NewScatter(optPts)
+	if err != nil {
+		return fmt.Errorf("NewScatter(opt): %w", err)
+	}
+	sc.Shape = draw.CrossGlyph{}
+	sc.Radius = vg.Points(5)
+	sc.Color = color.RGBA{R: 200, G: 40, B: 40, A: 255}
+	cp.Add(sc)
+	cp.Legend.Add("x* (штрафной метод)", sc)
+
+	if err := cp.Save(11*vg.Inch, 8*vg.Inch, filename); err != nil {
+		return fmt.Errorf("Save(%q): %w", filename, err)
+	}
+	return nil
+}
+
 // PlotLP2D строит график задачи ЛП в 2D:
 // границы ограничений, допустимую область, оптимальную точку и линию уровня цели.
 func PlotLP2D(title, filename string, prob ml.Problem, res *ml.Result) error {
