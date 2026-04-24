@@ -117,17 +117,17 @@ func main() {
 	fmt.Println("Лабораторная работа №4. Условная минимизация методом штрафных функций")
 	fmt.Println("Целевая функция: f(x1,x2) = x1² + 3x2² + cos(x1+x2)")
 	fmt.Println("Ограничения:")
-	fmt.Println("  x1 + x2 - 0.5 <= 0")
-	fmt.Println("  x1 >= 0")
-	fmt.Println("  x2 >= 0")
+	fmt.Println("  x1 >= 2")
+	fmt.Println("  x2 >= 2")
+	fmt.Println("  x1 + x2 <= 5")
 	fmt.Printf("Начальная точка: x̄₀ = (%.1f; %.1f),  точность: %.0e\n\n", fn2.X01, fn2.X02, *eps)
 
 	penaltyA := [][]float64{
-		{1, 1},
 		{-1, 0},
 		{0, -1},
+		{1, 1},
 	}
-	penaltyB := []float64{0.5, 0, 0}
+	penaltyB := []float64{-2, -2, 5}
 	penaltySense := []ml.ConstraintSense{ml.SenseLE, ml.SenseLE, ml.SenseLE}
 
 	penaltyConstraints := make([]m2.Constraint2D, 0, len(penaltyA))
@@ -168,7 +168,7 @@ func main() {
 	errPenaltyPlot := plotter.PlotConstrainedContour(
 		"Лаб. №4 · f(x₁,x₂) и ограничения (метод штрафных функций)",
 		graphicsDir+"/lab4_penalty_contour.png",
-		-0.2, 1.2, -0.2, 1.2,
+		0.0, 4.0, 0.0, 4.0,
 		200, 20,
 		fn2.F2,
 		penaltyA,
