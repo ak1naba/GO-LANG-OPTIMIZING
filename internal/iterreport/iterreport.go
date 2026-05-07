@@ -8,6 +8,7 @@ import (
 
 	ml "optimization/internal/methods/linear"
 	m1 "optimization/internal/methods/oneVariable"
+	mt "optimization/internal/methods/transport"
 	m2 "optimization/internal/methods/twoVariables"
 )
 
@@ -116,6 +117,74 @@ func SaveLP(filename, methodName string, res ml.Result) error {
 		b.WriteString("\n")
 
 		for _, it := range res.Trace {
+			enter := "-"
+			leave := "-"
+			if it.EnterVar > 0 {
+				enter = fmt.Sprintf("x%d", it.EnterVar)
+			}
+			if it.LeaveVar > 0 {
+				leave = fmt.Sprintf("x%d", it.LeaveVar)
+			}
+
+			b.WriteString(fmt.Sprintf("%d\t%s\t%s\t%.10f", it.K, enter, leave, it.Objective))
+			for i := 0; i < varCount; i++ {
+				v := 0.0
+				if i < len(it.X) {
+					v = it.X[i]
+				}
+				b.WriteString(fmt.Sprintf("\t%.10f", v))
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if _, err := f.WriteString(b.String()); err != nil {
+		return fmt.Errorf("write %q: %w", filename, err)
+	}
+	return nil
+}
+
+// SaveTransport сохраняет результат решения транспортной задачи в txt.
+func SaveTransport(filename, methodName string, res mt.Result) error {
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(filename), err)
+	}
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("create %q: %w", filename, err)
+	}
+	defer f.Close()
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Метод: %s\n", methodName))
+	b.WriteString(fmt.Sprintf("Статус: %s\n", res.Linear.Status))
+	b.WriteString(fmt.Sprintf("Итераций = %d\n", res.Linear.Iterations))
+	b.WriteString(fmt.Sprintf("Минимальная стоимость = %.10f\n", res.Cost))
+
+	if len(res.Plan) > 0 {
+		b.WriteString("\nПлан перевозок:\n")
+		for i := range res.Plan {
+			for j := range res.Plan[i] {
+				b.WriteString(fmt.Sprintf("%.10f", res.Plan[i][j]))
+				if j+1 < len(res.Plan[i]) {
+					b.WriteString("\t")
+				}
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if len(res.Linear.Trace) > 0 {
+		varCount := len(res.Linear.X)
+		b.WriteString("\nИтерационная таблица:\n")
+		b.WriteString("k\tenter\tleave\tF")
+		for i := 0; i < varCount; i++ {
+			b.WriteString(fmt.Sprintf("\tx%d", i+1))
+		}
+		b.WriteString("\n")
+
+		for _, it := range res.Linear.Trace {
 			enter := "-"
 			leave := "-"
 			if it.EnterVar > 0 {

@@ -9,10 +9,12 @@ import (
 
 	fn3 "optimization/internal/fn/linear"
 	fn1 "optimization/internal/fn/oneVariable"
+	fnT "optimization/internal/fn/transport"
 	fn2 "optimization/internal/fn/twoVariables"
 	"optimization/internal/iterreport"
 	ml "optimization/internal/methods/linear"
 	m1 "optimization/internal/methods/oneVariable"
+	mt "optimization/internal/methods/transport"
 	m2 "optimization/internal/methods/twoVariables"
 	"optimization/internal/plotter"
 )
@@ -258,6 +260,49 @@ func main() {
 		log.Printf("Ошибка построения графика ЛП: %v", errLPPlot)
 	} else {
 		fmt.Println("График ЛП сохранён: output/graphics/lp_lab3_feasible.png")
+	}
+
+	// Лабораторная работа №5
+	fmt.Println()
+	fmt.Println("Лабораторная работа №5. Транспортная задача")
+	fmt.Println("Матрица стоимостей и запасы/потребности заданы по варианту 7")
+	fmt.Println("Стоимость перевозок:")
+	transportProblem := fnT.TransportVariant7()
+	for i := range transportProblem.Costs {
+		for j := range transportProblem.Costs[i] {
+			fmt.Printf("%6.0f", transportProblem.Costs[i][j])
+		}
+		fmt.Printf(" | a%d = %.0f\n", i+1, transportProblem.Supply[i])
+	}
+	fmt.Print("  bj: ")
+	for _, v := range transportProblem.Demand {
+		fmt.Printf("%6.0f", v)
+	}
+	fmt.Println()
+
+	transportRes, errTransport := mt.Solve(transportProblem, *eps)
+	if errTransport != nil {
+		log.Printf("Ошибка решения транспортной задачи: %v", errTransport)
+	} else {
+		txtName := fmt.Sprintf("%s/iter_lab5_transport.txt", tablesDir)
+		if err := iterreport.SaveTransport(txtName, "Симплекс-метод через сведение к ЛП", transportRes); err != nil {
+			log.Printf("Ошибка сохранения таблицы транспортной задачи: %v", err)
+		} else {
+			fmt.Printf("Таблица результата транспортной задачи сохранена: %s\n", txtName)
+		}
+
+		sep()
+		fmt.Printf("Метод:      %s\n", "Симплекс-метод через сведение к ЛП")
+		fmt.Printf("Статус     = %s\n", transportRes.Linear.Status)
+		fmt.Printf("Минимальная стоимость = %.6f\n", transportRes.Cost)
+		fmt.Printf("Итераций  = %d\n", transportRes.Linear.Iterations)
+		fmt.Println("План перевозок:")
+		for i := range transportRes.Plan {
+			for j := range transportRes.Plan[i] {
+				fmt.Printf("%8.3f", transportRes.Plan[i][j])
+			}
+			fmt.Println()
+		}
 	}
 
 }
