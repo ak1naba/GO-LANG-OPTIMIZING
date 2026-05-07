@@ -280,19 +280,20 @@ func main() {
 	}
 	fmt.Println()
 
+	const transportMethodName = "Метод потенциалов"
 	transportRes, errTransport := mt.Solve(transportProblem, *eps)
 	if errTransport != nil {
 		log.Printf("Ошибка решения транспортной задачи: %v", errTransport)
 	} else {
 		txtName := fmt.Sprintf("%s/iter_lab5_transport.txt", tablesDir)
-		if err := iterreport.SaveTransport(txtName, "Симплекс-метод через сведение к ЛП", transportRes); err != nil {
+		if err := iterreport.SaveTransport(txtName, transportMethodName, transportRes); err != nil {
 			log.Printf("Ошибка сохранения таблицы транспортной задачи: %v", err)
 		} else {
 			fmt.Printf("Таблица результата транспортной задачи сохранена: %s\n", txtName)
 		}
 
 		sep()
-		fmt.Printf("Метод:      %s\n", "Симплекс-метод через сведение к ЛП")
+		fmt.Printf("Метод:      %s\n", transportMethodName)
 		fmt.Printf("Статус     = %s\n", transportRes.Linear.Status)
 		fmt.Printf("Минимальная стоимость = %.6f\n", transportRes.Cost)
 		fmt.Printf("Итераций  = %d\n", transportRes.Linear.Iterations)

@@ -60,64 +60,459 @@ func Solve(p Problem, eps float64) (Result, error) {
 		return Result{}, fmt.Errorf("transport problem must be balanced: supply=%.6f demand=%.6f", supplySum, demandSum)
 	}
 
-	varCount := m * n
-	c := make([]float64, varCount)
-	a := make([][]float64, m+n)
-	b := make([]float64, m+n)
-	sense := make([]ml.ConstraintSense, m+n)
-
-	for i := range a {
-		a[i] = make([]float64, varCount)
-		sense[i] = ml.SenseEQ
-	}
-
-	for i := 0; i < m; i++ {
-		b[i] = p.Supply[i]
-		for j := 0; j < n; j++ {
-			idx := i*n + j
-			c[idx] = -p.Costs[i][j]
-			a[i][idx] = 1
-		}
-	}
-
-	for j := 0; j < n; j++ {
-		b[m+j] = p.Demand[j]
-		for i := 0; i < m; i++ {
-			idx := i*n + j
-			a[m+j][idx] = 1
-		}
-	}
-
-	linearProblem := ml.Problem{
-		C:     c,
-		A:     a,
-		B:     b,
-		Sense: sense,
-	}
-
-	linearRes, err := ml.SolveSimplex(linearProblem, eps)
+	plan, trace, err := solveByPotentialsTransport(p, eps)
 	if err != nil {
 		return Result{}, err
 	}
 
-	plan := make([][]float64, m)
-	for i := range plan {
-		plan[i] = make([]float64, n)
-	}
-	for i := 0; i < m; i++ {
-		for j := 0; j < n; j++ {
-			idx := i*n + j
-			if idx < len(linearRes.X) {
-				plan[i][j] = linearRes.X[idx]
-			}
-		}
+	cost := totalTransportCost(p.Costs, plan)
+	linearRes := ml.Result{
+		X:          flattenTransportPlan(plan),
+		Objective:  cost,
+		Iterations: len(trace) - 1,
+		Status:     "optimal",
+		Trace:      trace,
 	}
 
 	return Result{
 		Plan:   plan,
-		Cost:   -linearRes.Objective,
+		Cost:   cost,
 		Linear: linearRes,
 	}, nil
+}
+
+type transportEdge struct {
+	row int
+	col int
+}
+
+type transportNode struct {
+	isRow bool
+	idx   int
+}
+
+type transportUnionFind struct {
+	parent []int
+	rank   []int
+}
+
+func newTransportUnionFind(size int) *transportUnionFind {
+	parent := make([]int, size)
+	rank := make([]int, size)
+	for i := range parent {
+		parent[i] = i
+	}
+	return &transportUnionFind{parent: parent, rank: rank}
+}
+
+func (uf *transportUnionFind) find(x int) int {
+	if uf.parent[x] != x {
+		uf.parent[x] = uf.find(uf.parent[x])
+	}
+	return uf.parent[x]
+}
+
+func (uf *transportUnionFind) union(a, b int) bool {
+	ra := uf.find(a)
+	rb := uf.find(b)
+	if ra == rb {
+		return false
+	}
+	if uf.rank[ra] < uf.rank[rb] {
+		uf.parent[ra] = rb
+	} else if uf.rank[ra] > uf.rank[rb] {
+		uf.parent[rb] = ra
+	} else {
+		uf.parent[rb] = ra
+		uf.rank[ra]++
+	}
+	return true
+}
+
+func solveByPotentialsTransport(p Problem, eps float64) ([][]float64, []ml.IterationLP, error) {
+	n := len(p.Costs[0])
+
+	plan, basic, err := buildInitialTransportBasis(p, eps)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	trace := make([]ml.IterationLP, 0, 32)
+	trace = append(trace, transportTracePoint(0, -1, -1, plan, p.Costs, totalTransportCost(p.Costs, plan)))
+
+	for iter := 1; iter <= 10_000; iter++ {
+		u, v := computeTransportPotentials(p.Costs, basic)
+		enterI, enterJ, minDelta := chooseTransportEntering(p.Costs, basic, u, v, eps)
+		if enterI == -1 {
+			return plan, trace, nil
+		}
+
+		path, err := findTransportPath(basic, enterI, enterJ)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		cycle := make([]transportEdge, 0, len(path)+1)
+		cycle = append(cycle, transportEdge{row: enterI, col: enterJ})
+		cycle = append(cycle, path...)
+
+		theta := math.Inf(1)
+		leaveIndex := -1
+		for k := 1; k < len(cycle); k += 2 {
+			e := cycle[k]
+			if plan[e.row][e.col] < theta-eps {
+				theta = plan[e.row][e.col]
+				leaveIndex = k
+			}
+		}
+		if leaveIndex == -1 {
+			theta = 0
+			leaveIndex = 1
+		}
+
+		for k, e := range cycle {
+			if k%2 == 0 {
+				plan[e.row][e.col] += theta
+			} else {
+				plan[e.row][e.col] -= theta
+				if math.Abs(plan[e.row][e.col]) < eps {
+					plan[e.row][e.col] = 0
+				}
+			}
+		}
+
+		basic[enterI][enterJ] = true
+		leave := cycle[leaveIndex]
+		if !(leave.row == enterI && leave.col == enterJ) {
+			basic[leave.row][leave.col] = false
+		}
+
+		trace = append(trace, transportTracePoint(iter, enterI*n+enterJ+1, leave.row*n+leave.col+1, plan, p.Costs, totalTransportCost(p.Costs, plan)))
+		_ = minDelta
+	}
+
+	return nil, nil, errors.New("transport potentials reached iteration limit")
+}
+
+func buildInitialTransportBasis(p Problem, eps float64) ([][]float64, [][]bool, error) {
+	m := len(p.Costs)
+	n := len(p.Costs[0])
+
+	plan := make([][]float64, m)
+	basic := make([][]bool, m)
+	for i := 0; i < m; i++ {
+		plan[i] = make([]float64, n)
+		basic[i] = make([]bool, n)
+	}
+
+	supply := make([]float64, m)
+	demand := make([]float64, n)
+	copy(supply, p.Supply)
+	copy(demand, p.Demand)
+
+	i, j := 0, 0
+	basicCount := 0
+	for i < m && j < n {
+		x := math.Min(supply[i], demand[j])
+		plan[i][j] = x
+		basic[i][j] = true
+		basicCount++
+
+		supply[i] -= x
+		demand[j] -= x
+
+		if math.Abs(supply[i]) < eps && math.Abs(demand[j]) < eps {
+			if i+1 < m || j+1 < n {
+				if i+1 < m {
+					i++
+				}
+				if j+1 < n {
+					j++
+				}
+			} else {
+				break
+			}
+		} else if math.Abs(supply[i]) < eps {
+			i++
+		} else if math.Abs(demand[j]) < eps {
+			j++
+		}
+	}
+
+	uf := newTransportUnionFind(m + n)
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			if basic[r][c] {
+				uf.union(r, m+c)
+			}
+		}
+	}
+
+	for basicCount < m+n-1 {
+		added := false
+		for r := 0; r < m && !added; r++ {
+			for c := 0; c < n && !added; c++ {
+				if basic[r][c] {
+					continue
+				}
+				if uf.union(r, m+c) {
+					basic[r][c] = true
+					plan[r][c] = 0
+					basicCount++
+					added = true
+				}
+			}
+		}
+		if !added {
+			return nil, nil, errors.New("cannot build connected initial basis for transport problem")
+		}
+	}
+
+	return plan, basic, nil
+}
+
+func computeTransportPotentials(costs [][]float64, basic [][]bool) ([]float64, []float64) {
+	m := len(costs)
+	n := len(costs[0])
+	u := make([]float64, m)
+	v := make([]float64, n)
+	uKnown := make([]bool, m)
+	vKnown := make([]bool, n)
+
+	queue := make([]transportNode, 0, m+n)
+	uKnown[0] = true
+	u[0] = 0
+	queue = append(queue, transportNode{isRow: true, idx: 0})
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+
+		if node.isRow {
+			r := node.idx
+			for c := 0; c < n; c++ {
+				if !basic[r][c] || vKnown[c] {
+					continue
+				}
+				v[c] = costs[r][c] - u[r]
+				vKnown[c] = true
+				queue = append(queue, transportNode{isRow: false, idx: c})
+			}
+		} else {
+			c := node.idx
+			for r := 0; r < m; r++ {
+				if !basic[r][c] || uKnown[r] {
+					continue
+				}
+				u[r] = costs[r][c] - v[c]
+				uKnown[r] = true
+				queue = append(queue, transportNode{isRow: true, idx: r})
+			}
+		}
+	}
+
+	for r := 0; r < m; r++ {
+		if uKnown[r] {
+			continue
+		}
+		uKnown[r] = true
+		u[r] = 0
+		queue = append(queue, transportNode{isRow: true, idx: r})
+		for len(queue) > 0 {
+			node := queue[0]
+			queue = queue[1:]
+			if node.isRow {
+				rr := node.idx
+				for c := 0; c < n; c++ {
+					if !basic[rr][c] || vKnown[c] {
+						continue
+					}
+					v[c] = costs[rr][c] - u[rr]
+					vKnown[c] = true
+					queue = append(queue, transportNode{isRow: false, idx: c})
+				}
+			} else {
+				cc := node.idx
+				for rr := 0; rr < m; rr++ {
+					if !basic[rr][cc] || uKnown[rr] {
+						continue
+					}
+					u[rr] = costs[rr][cc] - v[cc]
+					uKnown[rr] = true
+					queue = append(queue, transportNode{isRow: true, idx: rr})
+				}
+			}
+		}
+	}
+
+	for c := 0; c < n; c++ {
+		if vKnown[c] {
+			continue
+		}
+		vKnown[c] = true
+		v[c] = 0
+		queue = append(queue, transportNode{isRow: false, idx: c})
+		for len(queue) > 0 {
+			node := queue[0]
+			queue = queue[1:]
+			if node.isRow {
+				rr := node.idx
+				for cc := 0; cc < n; cc++ {
+					if !basic[rr][cc] || vKnown[cc] {
+						continue
+					}
+					v[cc] = costs[rr][cc] - u[rr]
+					vKnown[cc] = true
+					queue = append(queue, transportNode{isRow: false, idx: cc})
+				}
+			} else {
+				cc := node.idx
+				for rr := 0; rr < m; rr++ {
+					if !basic[rr][cc] || uKnown[rr] {
+						continue
+					}
+					u[rr] = costs[rr][cc] - v[cc]
+					uKnown[rr] = true
+					queue = append(queue, transportNode{isRow: true, idx: rr})
+				}
+			}
+		}
+	}
+
+	return u, v
+}
+
+func chooseTransportEntering(costs [][]float64, basic [][]bool, u, v []float64, eps float64) (int, int, float64) {
+	m := len(costs)
+	n := len(costs[0])
+	enterI := -1
+	enterJ := -1
+	minDelta := 0.0
+
+	for i := 0; i < m; i++ {
+		for j := 0; j < n; j++ {
+			if basic[i][j] {
+				continue
+			}
+			delta := costs[i][j] - u[i] - v[j]
+			if delta < minDelta-eps {
+				minDelta = delta
+				enterI = i
+				enterJ = j
+			}
+		}
+	}
+
+	return enterI, enterJ, minDelta
+}
+
+func findTransportPath(basic [][]bool, enterI, enterJ int) ([]transportEdge, error) {
+	m := len(basic)
+	n := len(basic[0])
+	totalNodes := m + n
+	start := enterI
+	target := m + enterJ
+
+	queue := make([]int, 0, totalNodes)
+	queue = append(queue, start)
+	visited := make([]bool, totalNodes)
+	visited[start] = true
+	parent := make([]int, totalNodes)
+	parentEdge := make([]transportEdge, totalNodes)
+	for i := range parent {
+		parent[i] = -1
+	}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		if node < m {
+			r := node
+			for c := 0; c < n; c++ {
+				if !basic[r][c] {
+					continue
+				}
+				next := m + c
+				if visited[next] {
+					continue
+				}
+				visited[next] = true
+				parent[next] = node
+				parentEdge[next] = transportEdge{row: r, col: c}
+				queue = append(queue, next)
+			}
+		} else {
+			c := node - m
+			for r := 0; r < m; r++ {
+				if !basic[r][c] {
+					continue
+				}
+				next := r
+				if visited[next] {
+					continue
+				}
+				visited[next] = true
+				parent[next] = node
+				parentEdge[next] = transportEdge{row: r, col: c}
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	if !visited[target] {
+		return nil, fmt.Errorf("no path between entering row %d and column %d in basis tree", enterI, enterJ)
+	}
+
+	path := make([]transportEdge, 0, totalNodes)
+	cur := target
+	for cur != start {
+		path = append(path, parentEdge[cur])
+		cur = parent[cur]
+		if cur < 0 {
+			return nil, errors.New("broken parent chain while reconstructing transport path")
+		}
+	}
+
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	return path, nil
+}
+
+func transportTracePoint(k int, enterVar, leaveVar int, plan [][]float64, costs [][]float64, objective float64) ml.IterationLP {
+	return ml.IterationLP{
+		K:         k,
+		EnterVar:  enterVar,
+		LeaveVar:  leaveVar,
+		Objective: objective,
+		X:         flattenTransportPlan(plan),
+	}
+}
+
+func flattenTransportPlan(plan [][]float64) []float64 {
+	if len(plan) == 0 {
+		return nil
+	}
+	m := len(plan)
+	n := len(plan[0])
+	x := make([]float64, m*n)
+	for i := 0; i < m; i++ {
+		for j := 0; j < n; j++ {
+			x[i*n+j] = plan[i][j]
+		}
+	}
+	return x
+}
+
+func totalTransportCost(costs [][]float64, plan [][]float64) float64 {
+	total := 0.0
+	for i := range plan {
+		for j := range plan[i] {
+			total += costs[i][j] * plan[i][j]
+		}
+	}
+	return total
 }
 
 // solveByPotentials реализует метод потенциалов (MODI) с инициализацией "northwest corner".
