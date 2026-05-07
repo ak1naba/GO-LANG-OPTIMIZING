@@ -175,6 +175,39 @@ func SaveTransport(filename, methodName string, res mt.Result) error {
 		}
 	}
 
+	if len(res.Linear.Trace) > 0 && len(res.Plan) > 0 {
+		rows := len(res.Plan)
+		cols := len(res.Plan[0])
+		b.WriteString("\nПромежуточные таблицы:\n")
+		for _, it := range res.Linear.Trace {
+			enter := "-"
+			leave := "-"
+			if it.EnterVar > 0 {
+				enter = fmt.Sprintf("x%d", it.EnterVar)
+			}
+			if it.LeaveVar > 0 {
+				leave = fmt.Sprintf("x%d", it.LeaveVar)
+			}
+
+			b.WriteString(fmt.Sprintf("\nИтерация %d\n", it.K))
+			b.WriteString(fmt.Sprintf("enter=%s\tleave=%s\tF=%.10f\n", enter, leave, it.Objective))
+			for r := 0; r < rows; r++ {
+				for c := 0; c < cols; c++ {
+					idx := r*cols + c
+					v := 0.0
+					if idx < len(it.X) {
+						v = it.X[idx]
+					}
+					b.WriteString(fmt.Sprintf("%.10f", v))
+					if c+1 < cols {
+						b.WriteString("\t")
+					}
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+
 	if len(res.Linear.Trace) > 0 {
 		varCount := len(res.Linear.X)
 		b.WriteString("\nИтерационная таблица:\n")
